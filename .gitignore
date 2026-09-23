@@ -69,6 +69,20 @@ yarn-error.log
 # Yarn
 .yarn/*
 !.yarn/patches
+
+# Environment variables
+.env
+.env.*
+
+# VS Code
+.vscode/
+
+# Release files
+*.apk
+*.aab
+
+# Windows
+Thumbs.db
 !.yarn/plugins
 !.yarn/releases
 !.yarn/sdks
