@@ -1,295 +1,496 @@
-import React, {useState} from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   View,
   Text,
-  TouchableOpacity,
   StyleSheet,
+  FlatList,
+  Image,
+  TouchableOpacity,
+  ActivityIndicator,
 } from 'react-native';
 import {
-  launchImageLibrary,
-  Asset,
-} from 'react-native-image-picker';
-
-import {uploadReel} from '../service/cloudinaryUpload';
+  useFocusEffect,
+  useNavigation,
+} from '@react-navigation/native';
 
 const BACKEND_URL = 'http://localhost:5000';
 
-export default function Home() {
-  const [video, setVideo] = useState<Asset | null>(null);
-  const [uploading, setUploading] = useState(false);
-  const [uploadMessage, setUploadMessage] =
-    useState('');
+type Reel = {
+  _id: string;
+  title: string;
+  videoUrl: string;
+  publicId: string;
+  description?: string;
+  likes: number;
+  views: number;
+  createdAt: string;
+  updatedAt: string;
+};
 
-  const selectVideo = async () => {
-    setUploadMessage('');
+type ReelsResponse = {
+  success: boolean;
+  count: number;
+  data: Reel[];
+  message?: string;
+};
 
-    const result = await launchImageLibrary({
-      mediaType: 'video',
-      selectionLimit: 1,
-    });
+// Convert Cloudinary video URL into a thumbnail URL
+const getThumbnailUrl = (videoUrl: string) => {
+  return videoUrl
+    .replace(
+      '/video/upload/',
+      '/video/upload/so_0,w_600,h_850,c_fill/',
+    )
+    .replace(/\.[^/.]+$/, '.jpg');
+};
 
-    if (result.didCancel) {
-      return;
-    }
+const formatViews = (views: number) => {
+  if (views >= 1000000) {
+    return `${(views / 1000000).toFixed(1)}M`;
+  }
 
-    if (result.errorCode) {
-      console.log(
-        'VIDEO PICKER ERROR:',
-        result.errorMessage,
-      );
+  if (views >= 1000) {
+    return `${(views / 1000).toFixed(1)}K`;
+  }
 
-      setUploadMessage(
-        result.errorMessage ||
-          'Failed to select video',
-      );
+  return String(views);
+};
 
-      return;
-    }
+const Home = () => {
+  const navigation = useNavigation<any>();
 
-    const selectedVideo = result.assets?.[0];
+  const [reels, setReels] = useState<Reel[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
-    if (!selectedVideo?.uri) {
-      setUploadMessage(
-        'No video URI received',
-      );
-
-      return;
-    }
-
-    console.log(
-      'SELECTED VIDEO:',
-      selectedVideo,
-    );
-
-    setVideo(selectedVideo);
-  };
-
-  const handleUpload = async () => {
-    if (!video?.uri) {
-      setUploadMessage(
-        'Please select a video first',
-      );
-
-      return;
-    }
-
+  const fetchReels = async () => {
     try {
-      setUploading(true);
+      setLoading(true);
+      setError('');
 
-      setUploadMessage(
-        'Uploading video to Cloudinary...',
-      );
-
-      // ==========================================
-      // STEP 1: Upload video to Cloudinary
-      // ==========================================
-
-      const cloudinaryResult = await uploadReel(
-        video.uri,
-        video.fileName,
-      );
-
-      console.log(
-        'CLOUDINARY RESULT:',
-        cloudinaryResult,
-      );
-
-      // ==========================================
-      // STEP 2: Save Cloudinary information
-      //         to MongoDB Atlas
-      // ==========================================
-
-      setUploadMessage(
-        'Cloudinary upload successful!\n\nSaving reel to MongoDB...',
-      );
-
-      const databaseResponse = await fetch(
+      const response = await fetch(
         `${BACKEND_URL}/api/reels`,
-        {
-          method: 'POST',
-
-          headers: {
-            'Content-Type': 'application/json',
-          },
-
-          body: JSON.stringify({
-            title:
-              video.fileName ||
-              'Untitled Reel',
-
-            videoUrl:
-              cloudinaryResult.secure_url,
-
-            publicId:
-              cloudinaryResult.public_id,
-
-            description: '',
-          }),
-        },
       );
 
-      // Check HTTP response
-      if (!databaseResponse.ok) {
-        const errorText =
-          await databaseResponse.text();
-
-        console.log(
-          'DATABASE ERROR:',
-          errorText,
-        );
-
+      if (!response.ok) {
         throw new Error(
-          `MongoDB request failed: ${databaseResponse.status}`,
+          `Server error: ${response.status}`,
         );
       }
 
-      const databaseResult =
-        await databaseResponse.json();
+      const result =
+        (await response.json()) as ReelsResponse;
 
-      console.log(
-        'MONGODB RESULT:',
-        databaseResult,
-      );
+      if (result.success) {
+        setReels(result.data);
+      } else {
+        setError(
+          result.message || 'Failed to load reels',
+        );
+      }
+    } catch (err) {
+      console.error('HOME REELS ERROR:', err);
 
-      // ==========================================
-      // STEP 3: Everything succeeded
-      // ==========================================
-
-      setUploadMessage(
-        'Reel uploaded successfully!\n\n' +
-          'Cloudinary: ✓\n' +
-          'MongoDB Atlas: ✓',
-      );
-    } catch (error) {
-      console.error(
-        'UPLOAD ERROR:',
-        error,
-      );
-
-      setUploadMessage(
-        `Upload failed:\n\n${String(error)}`,
+      setError(
+        'Unable to load reels. Check your backend connection.',
       );
     } finally {
-      setUploading(false);
+      setLoading(false);
     }
   };
 
+  // Refresh whenever Home tab is opened
+  useFocusEffect(
+    useCallback(() => {
+      fetchReels();
+    }, []),
+  );
+
+  // Open selected reel inside For You
+  const openReel = (reelId: string) => {
+    navigation.navigate('ForYou', {
+      reelId: reelId,
+    });
+  };
+
+  const renderReel = ({
+    item,
+  }: {
+    item: Reel;
+  }) => {
+    const thumbnailUrl = getThumbnailUrl(
+      item.videoUrl,
+    );
+
+    return (
+      <TouchableOpacity
+        style={styles.card}
+        activeOpacity={0.9}
+        onPress={() => openReel(item._id)}>
+
+        {/* Thumbnail */}
+        <View style={styles.imageContainer}>
+          <Image
+            source={{ uri: thumbnailUrl }}
+            style={styles.thumbnail}
+            resizeMode="cover"
+          />
+
+          {/* Play button */}
+          <View
+            pointerEvents="none"
+            style={styles.playButton}>
+            <Text style={styles.playIcon}>
+              ▶
+            </Text>
+          </View>
+
+          {/* Dubbed badge */}
+          <View style={styles.dubbedBadge}>
+            <Text style={styles.dubbedText}>
+              Dubbed
+            </Text>
+          </View>
+
+          {/* Views */}
+          <View style={styles.viewsContainer}>
+            <Text style={styles.viewsText}>
+              🔥 {formatViews(item.views)}
+            </Text>
+          </View>
+        </View>
+
+        {/* Title */}
+        <Text
+          style={styles.title}
+          numberOfLines={2}>
+          {item.title}
+        </Text>
+
+        {/* Description / Tag */}
+        {item.description ? (
+          <View style={styles.tag}>
+            <Text
+              style={styles.tagText}
+              numberOfLines={1}>
+              {item.description}
+            </Text>
+          </View>
+        ) : (
+          <View style={styles.tag}>
+            <Text style={styles.tagText}>
+              Drama
+            </Text>
+          </View>
+        )}
+      </TouchableOpacity>
+    );
+  };
+
+  if (loading) {
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator
+          size="large"
+          color="#ff3b30"
+        />
+
+        <Text style={styles.loadingText}>
+          Loading reels...
+        </Text>
+      </View>
+    );
+  }
+
+  if (error) {
+    return (
+      <View style={styles.center}>
+        <Text style={styles.errorText}>
+          {error}
+        </Text>
+
+        <TouchableOpacity
+          style={styles.retryButton}
+          onPress={fetchReels}>
+          <Text style={styles.retryText}>
+            Retry
+          </Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>
-        Upload Reel
-      </Text>
 
-      <TouchableOpacity
-        style={styles.button}
-        onPress={selectVideo}>
-        <Text style={styles.buttonText}>
-          Select Video
+      {/* Category */}
+      <View style={styles.categoryRow}>
+        <Text style={styles.activeCategory}>
+          Drama
         </Text>
-      </TouchableOpacity>
 
-      {video && (
-        <View style={styles.info}>
-          <Text style={styles.label}>
-            Selected video:
+        <Text style={styles.category}>
+          Anime
+        </Text>
+      </View>
+
+      {/* Filters */}
+      <View style={styles.filterRow}>
+        <View style={styles.activeFilter}>
+          <Text style={styles.activeFilterText}>
+            Popular
           </Text>
-
-          <Text style={styles.text}>
-            {video.fileName || 'Unknown file'}
-          </Text>
-
-          {video.fileSize && (
-            <Text style={styles.text}>
-              Size:{' '}
-              {(
-                video.fileSize /
-                (1024 * 1024)
-              ).toFixed(2)}{' '}
-              MB
-            </Text>
-          )}
-
-          <TouchableOpacity
-            style={[
-              styles.button,
-              styles.uploadButton,
-              uploading &&
-                styles.disabledButton,
-            ]}
-            onPress={handleUpload}
-            disabled={uploading}>
-            <Text style={styles.buttonText}>
-              {uploading
-                ? 'Uploading...'
-                : 'Upload Reel'}
-            </Text>
-          </TouchableOpacity>
         </View>
-      )}
 
-      {uploadMessage !== '' && (
-        <Text style={styles.message}>
-          {uploadMessage}
-        </Text>
-      )}
+        <View style={styles.filter}>
+          <Text style={styles.filterText}>
+            New
+          </Text>
+        </View>
+
+        <View style={styles.filter}>
+          <Text style={styles.filterText}>
+            Coming Soon
+          </Text>
+        </View>
+
+        <View style={styles.filter}>
+          <Text style={styles.filterText}>
+            Dubbed
+          </Text>
+        </View>
+      </View>
+
+      {/* Reel Grid */}
+      <FlatList
+        data={reels}
+        keyExtractor={item => item._id}
+        renderItem={renderReel}
+        numColumns={2}
+        showsVerticalScrollIndicator={false}
+        columnWrapperStyle={styles.columnWrapper}
+        contentContainerStyle={styles.gridContent}
+        initialNumToRender={6}
+        maxToRenderPerBatch={6}
+        windowSize={5}
+        ListEmptyComponent={
+          <View style={styles.emptyContainer}>
+            <Text style={styles.emptyText}>
+              No reels available
+            </Text>
+          </View>
+        }
+      />
     </View>
   );
-}
+};
+
+export default Home;
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: '#0b090c',
+    paddingTop: 15,
+  },
+
+  categoryRow: {
+    flexDirection: 'row',
+    paddingHorizontal: 20,
+    marginBottom: 15,
+    gap: 30,
+  },
+
+  activeCategory: {
+    color: '#ffffff',
+    fontSize: 28,
+    fontWeight: '500',
+    borderBottomWidth: 3,
+    borderBottomColor: '#ffffff',
+    paddingBottom: 5,
+  },
+
+  category: {
+    color: '#999999',
+    fontSize: 28,
+    fontWeight: '500',
+  },
+
+  filterRow: {
+    flexDirection: 'row',
+    paddingHorizontal: 20,
+    marginBottom: 15,
+    gap: 10,
+  },
+
+  activeFilter: {
+    backgroundColor: '#3a373b',
+    paddingHorizontal: 15,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+
+  filter: {
+    backgroundColor: '#242125',
+    paddingHorizontal: 15,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+
+  activeFilterText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: 'bold',
+  },
+
+  filterText: {
+    color: '#999999',
+    fontSize: 15,
+    fontWeight: 'bold',
+  },
+
+  gridContent: {
+    paddingHorizontal: 12,
+    paddingBottom: 20,
+  },
+
+  columnWrapper: {
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+
+  card: {
+    width: '48.5%',
+    backgroundColor: '#211f22',
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+
+  imageContainer: {
+    width: '100%',
+    aspectRatio: 0.72,
+    position: 'relative',
+  },
+
+  thumbnail: {
+    width: '100%',
+    height: '100%',
+  },
+
+  playButton: {
+    position: 'absolute',
+    top: '50%',
+    left: '50%',
+    width: 50,
+    height: 50,
+    marginLeft: -25,
+    marginTop: -25,
+    borderRadius: 25,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+
+  playIcon: {
+    color: '#ffffff',
+    fontSize: 22,
+    marginLeft: 3,
+  },
+
+  dubbedBadge: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    backgroundColor: '#ff3b30',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderBottomLeftRadius: 5,
+  },
+
+  dubbedText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '500',
+  },
+
+  viewsContainer: {
+    position: 'absolute',
+    right: 7,
+    bottom: 7,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+
+  viewsText: {
+    color: '#ffffff',
+    fontSize: 12,
+  },
+
+  title: {
+    color: '#ffffff',
+    fontSize: 17,
+    fontWeight: '500',
+    paddingHorizontal: 10,
+    paddingTop: 8,
+    lineHeight: 22,
+  },
+
+  tag: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#4a474a',
+    borderRadius: 5,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    marginHorizontal: 10,
+    marginVertical: 8,
+  },
+
+  tagText: {
+    color: '#dddddd',
+    fontSize: 12,
+  },
+
+  center: {
+    flex: 1,
+    backgroundColor: '#0b090c',
     justifyContent: 'center',
     alignItems: 'center',
     padding: 20,
   },
 
-  title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    marginBottom: 30,
+  loadingText: {
+    color: '#aaaaaa',
+    marginTop: 10,
   },
 
-  button: {
-    backgroundColor: '#e50914',
-    paddingVertical: 14,
-    paddingHorizontal: 30,
+  errorText: {
+    color: '#ff6b6b',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+
+  retryButton: {
+    backgroundColor: '#ff3b30',
+    paddingHorizontal: 25,
+    paddingVertical: 10,
     borderRadius: 8,
   },
 
-  uploadButton: {
-    marginTop: 20,
-  },
-
-  disabledButton: {
-    opacity: 0.5,
-  },
-
-  buttonText: {
-    color: '#fff',
-    fontSize: 16,
+  retryText: {
+    color: '#ffffff',
     fontWeight: 'bold',
   },
 
-  info: {
-    marginTop: 30,
+  emptyContainer: {
     width: '100%',
+    alignItems: 'center',
+    paddingTop: 50,
   },
 
-  label: {
+  emptyText: {
+    color: '#888888',
     fontSize: 16,
-    fontWeight: 'bold',
-    marginBottom: 8,
-  },
-
-  text: {
-    fontSize: 13,
-    marginBottom: 8,
-  },
-
-  message: {
-    marginTop: 25,
-    fontSize: 13,
-    textAlign: 'center',
   },
 });

@@ -5,6 +5,7 @@ import dotenv from 'dotenv';
 import connectDB from './config/db';
 import reelRoutes from './Routes/reelRoutes';
 import cloudinaryRoutes from './Routes/cloudinaryRoutes';
+import authRoutes from './Routes/authRoutes';
 
 dotenv.config();
 
@@ -14,6 +15,7 @@ app.use(cors());
 app.use(express.json());
 app.use('/api/reels', reelRoutes);
 app.use('/api/cloudinary', cloudinaryRoutes);
+app.use('/api/auth', authRoutes);
 
 app.get('/api/health', (req: Request, res: Response) => {
   res.status(200).json({

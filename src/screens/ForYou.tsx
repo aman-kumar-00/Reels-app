@@ -16,12 +16,27 @@ import {
 } from 'react-native';
 
 import Video from 'react-native-video';
-import {useFocusEffect} from '@react-navigation/native';
 
-const {height: SCREEN_HEIGHT, width: SCREEN_WIDTH} =
-  Dimensions.get('window');
+import {
+  useFocusEffect,
+  useRoute,
+} from '@react-navigation/native';
+
+const {
+  height: SCREEN_HEIGHT,
+  width: SCREEN_WIDTH,
+} = Dimensions.get('window');
 
 const BACKEND_URL = 'http://localhost:5000';
+
+const ENABLE_VIDEO = false;
+
+const getOptimizedVideoUrl = (videoUrl: string): string => {
+  return videoUrl.replace(
+    '/video/upload/',
+    '/video/upload/q_auto,w_720,c_scale/',
+  );
+};
 
 type Reel = {
   _id: string;
@@ -43,74 +58,149 @@ type ReelsResponse = {
 };
 
 const ForYou = () => {
-  const [reels, setReels] = useState<Reel[]>([]);
-  const [activeIndex, setActiveIndex] = useState(0);
-  const [isPlaying, setIsPlaying] = useState(true);
+  const route = useRoute<any>();
 
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const selectedReelId =
+    route.params?.reelId;
+
+  const flatListRef =
+    useRef<FlatList<Reel>>(null);
+
+  const [reels, setReels] = useState<Reel[]>(
+    [],
+  );
+
+  const [activeIndex, setActiveIndex] =
+    useState(0);
+
+  const [isPlaying, setIsPlaying] =
+    useState(true);
+
+  const [loading, setLoading] =
+    useState(true);
+
+  const [error, setError] =
+    useState('');
 
   const viewabilityConfig = useRef({
     itemVisiblePercentThreshold: 50,
   }).current;
 
   // ==========================================
-  // FETCH REELS FROM BACKEND
+  // FETCH REELS
   // ==========================================
-useFocusEffect(
-  useCallback(() => {
-    const fetchReels = async () => {
-      try {
-        setLoading(true);
-        setError('');
 
-        console.log('Fetching latest reels...');
+  useFocusEffect(
+    useCallback(() => {
+      const fetchReels = async () => {
+        try {
+          setLoading(true);
+          setError('');
 
-        const response = await fetch(
-          `${BACKEND_URL}/api/reels`,
-        );
-
-        if (!response.ok) {
-          throw new Error(
-            `Failed to fetch reels: ${response.status}`,
+          console.log(
+            'Fetching latest reels...',
           );
-        }
 
-        const result =
-          (await response.json()) as ReelsResponse;
-
-        console.log(
-          'LATEST REELS:',
-          result,
-        );
-
-        if (!result.success) {
-          throw new Error(
-            result.message ||
-              'Failed to fetch reels',
+          const response = await fetch(
+            `${BACKEND_URL}/api/reels`,
           );
+
+          if (!response.ok) {
+            throw new Error(
+              `Failed to fetch reels: ${response.status}`,
+            );
+          }
+
+          const result =
+            (await response.json()) as ReelsResponse;
+
+          console.log(
+            'LATEST REELS:',
+            result,
+          );
+
+          if (!result.success) {
+            throw new Error(
+              result.message ||
+                'Failed to fetch reels',
+            );
+          }
+
+          setReels(result.data || []);
+
+          // If we opened For You normally,
+          // start from the first reel.
+          if (!selectedReelId) {
+            setActiveIndex(0);
+            setIsPlaying(true);
+          }
+        } catch (err) {
+          console.error(
+            'FETCH REELS ERROR:',
+            err,
+          );
+
+          setError(
+            `Failed to load reels:\n${String(
+              err,
+            )}`,
+          );
+        } finally {
+          setLoading(false);
         }
+      };
 
-        setReels(result.data || []);
-        setActiveIndex(0);
-        setIsPlaying(true);
-      } catch (err) {
-        console.error(
-          'FETCH REELS ERROR:',
-          err,
-        );
+      fetchReels();
+    }, [selectedReelId]),
+  );
 
-        setError(
-          `Failed to load reels:\n${String(err)}`,
-        );
-      } finally {
-        setLoading(false);
-      }
+  // ==========================================
+  // OPEN SELECTED REEL
+  // ==========================================
+
+  useEffect(() => {
+    if (
+      reels.length === 0 ||
+      !selectedReelId
+    ) {
+      return;
+    }
+
+    const selectedIndex = reels.findIndex(
+      reel =>
+        reel._id === selectedReelId,
+    );
+
+    if (selectedIndex === -1) {
+      console.log(
+        'Selected reel not found:',
+        selectedReelId,
+      );
+      return;
+    }
+
+    console.log(
+      'OPENING REEL:',
+      selectedReelId,
+      'INDEX:',
+      selectedIndex,
+    );
+
+    setActiveIndex(selectedIndex);
+    setIsPlaying(true);
+
+    // Wait for FlatList to render the data
+    const timer = setTimeout(() => {
+      flatListRef.current?.scrollToIndex({
+        index: selectedIndex,
+        animated: false,
+      });
+    }, 100);
+
+    return () => {
+      clearTimeout(timer);
     };
-
-    fetchReels();
-  }, []),
-);
+  }, [reels, selectedReelId]);
 
   // ==========================================
   // VIEWABILITY
@@ -122,9 +212,10 @@ useFocusEffect(
     }: {
       viewableItems: ListViewToken[];
     }) => {
-      const visibleItem = viewableItems.find(
-        item => item.isViewable,
-      );
+      const visibleItem =
+        viewableItems.find(
+          item => item.isViewable,
+        );
 
       if (
         visibleItem?.index !== null &&
@@ -135,7 +226,9 @@ useFocusEffect(
           visibleItem.index,
         );
 
-        setActiveIndex(visibleItem.index);
+        setActiveIndex(
+          visibleItem.index,
+        );
 
         // Automatically play new reel
         setIsPlaying(true);
@@ -150,19 +243,31 @@ useFocusEffect(
   const renderReel = ({
     item,
     index,
+
   }: {
     item: Reel;
     index: number;
   }) => {
-    const isActive = index === activeIndex;
+    const isActive =
+      index === activeIndex;
+
+        const optimizedUrl = getOptimizedVideoUrl(
+    item.videoUrl,
+  );
+
+   console.log(
+    'OPTIMIZED VIDEO URL:',
+    optimizedUrl,
+  );
 
     return (
       <View style={styles.reel}>
-        {/* Only mount the active video */}
-        {isActive && (
+
+        {/* Only mount active video */}
+        {isActive &&  ENABLE_VIDEO && (
           <Video
             source={{
-              uri: item.videoUrl,
+               uri: getOptimizedVideoUrl(item.videoUrl),
             }}
             style={styles.video}
             resizeMode="cover"
@@ -176,11 +281,11 @@ useFocusEffect(
                 item._id,
               );
             }}
-            onError={error => {
+            onError={videoError => {
               console.log(
                 'VIDEO ERROR:',
                 item._id,
-                error,
+                videoError,
               );
             }}
             onEnd={() => {
@@ -204,40 +309,48 @@ useFocusEffect(
             activeOpacity={1}
             style={styles.videoTouchArea}
             onPress={() => {
-              console.log('VIDEO TAP');
+              console.log(
+                'VIDEO TAP',
+              );
 
-              setIsPlaying(previous => {
-                console.log(
-                  'PLAY STATE:',
-                  !previous,
-                );
+              setIsPlaying(
+                previous => {
+                  console.log(
+                    'PLAY STATE:',
+                    !previous,
+                  );
 
-                return !previous;
-              });
+                  return !previous;
+                },
+              );
             }}
           />
         )}
 
         {/* Play button */}
-        {isActive && !isPlaying && (
-          <View
-            pointerEvents="none"
-            style={styles.playButton}>
-            <Text style={styles.playIcon}>
-              ▶
-            </Text>
-          </View>
-        )}
+        {isActive &&
+          !isPlaying && (
+            <View
+              pointerEvents="none"
+              style={styles.playButton}>
+              <Text
+                style={styles.playIcon}>
+                ▶
+              </Text>
+            </View>
+          )}
 
         {/* Right side actions */}
         <View style={styles.actions}>
+
           <TouchableOpacity
             style={styles.actionButton}>
             <Text style={styles.action}>
               ♡
             </Text>
 
-            <Text style={styles.actionText}>
+            <Text
+              style={styles.actionText}>
               {item.likes}
             </Text>
           </TouchableOpacity>
@@ -248,7 +361,8 @@ useFocusEffect(
               💬
             </Text>
 
-            <Text style={styles.actionText}>
+            <Text
+              style={styles.actionText}>
               Comment
             </Text>
           </TouchableOpacity>
@@ -259,7 +373,8 @@ useFocusEffect(
               ↗
             </Text>
 
-            <Text style={styles.actionText}>
+            <Text
+              style={styles.actionText}>
               Share
             </Text>
           </TouchableOpacity>
@@ -270,10 +385,12 @@ useFocusEffect(
               ⋮
             </Text>
           </TouchableOpacity>
+
         </View>
 
         {/* Reel information */}
         <View style={styles.info}>
+
           <Text style={styles.username}>
             @reelsapp
           </Text>
@@ -286,7 +403,9 @@ useFocusEffect(
           <Text style={styles.audio}>
             🎵 Original audio
           </Text>
+
         </View>
+
       </View>
     );
   };
@@ -297,8 +416,14 @@ useFocusEffect(
 
   if (loading) {
     return (
-      <View style={styles.centerContainer}>
-        <Text style={styles.centerText}>
+      <View
+        style={
+          styles.centerContainer
+        }>
+        <Text
+          style={
+            styles.centerText
+          }>
           Loading reels...
         </Text>
       </View>
@@ -311,8 +436,14 @@ useFocusEffect(
 
   if (error) {
     return (
-      <View style={styles.centerContainer}>
-        <Text style={styles.errorText}>
+      <View
+        style={
+          styles.centerContainer
+        }>
+        <Text
+          style={
+            styles.errorText
+          }>
           {error}
         </Text>
       </View>
@@ -325,8 +456,14 @@ useFocusEffect(
 
   if (reels.length === 0) {
     return (
-      <View style={styles.centerContainer}>
-        <Text style={styles.centerText}>
+      <View
+        style={
+          styles.centerContainer
+        }>
+        <Text
+          style={
+            styles.centerText
+          }>
           No reels available.
         </Text>
       </View>
@@ -339,16 +476,21 @@ useFocusEffect(
 
   return (
     <View style={styles.container}>
+
       <FlatList
+        ref={flatListRef}
         data={reels}
         renderItem={renderReel}
         keyExtractor={item => item._id}
+
         pagingEnabled
         showsVerticalScrollIndicator={false}
         decelerationRate="fast"
+
         onViewableItemsChanged={
           onViewableItemsChanged
         }
+
         viewabilityConfig={
           viewabilityConfig
         }
@@ -358,15 +500,33 @@ useFocusEffect(
         maxToRenderPerBatch={1}
         windowSize={3}
 
-        // Keep false for native video rendering
+        // Keep false for native video
         removeClippedSubviews={false}
 
         getItemLayout={(_, index) => ({
           length: SCREEN_HEIGHT,
-          offset: SCREEN_HEIGHT * index,
+          offset:
+            SCREEN_HEIGHT * index,
           index,
         })}
+
+        onScrollToIndexFailed={info => {
+          console.log(
+            'SCROLL TO INDEX FAILED:',
+            info,
+          );
+
+          setTimeout(() => {
+            flatListRef.current?.scrollToIndex(
+              {
+                index: info.index,
+                animated: false,
+              },
+            );
+          }, 300);
+        }}
       />
+
     </View>
   );
 };
